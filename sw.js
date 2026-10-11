@@ -1,97 +1,56 @@
-const CACHE_NAME = 'translator-v4-20260913';
+const CACHE_NAME = 'travel-translator-v2-20261011';
+const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
-const ASSETS = [
-  './',
-  './index.html',
-  './manifest.webmanifest'
-];
-
-// 安裝
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(ASSETS))
-      .then(() => self.skipWaiting())
-  );
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.addAll(APP_SHELL);
+    await self.skipWaiting();
+  })());
 });
 
-// 啟用：清除舊版快取
 self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys()
-      .then(keys =>
-        Promise.all(
-          keys
-            .filter(key => key !== CACHE_NAME)
-            .map(key => caches.delete(key))
-        )
-      )
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(key => key.startsWith('travel-translator-') && key !== CACHE_NAME).map(key => caches.delete(key)));
+    await self.clients.claim();
+  })());
 });
 
-// 請求處理
 self.addEventListener('fetch', event => {
   const request = event.request;
-
-  // 只處理 GET
-  if (request.method !== 'GET') {
-    return;
-  }
-
+  if (request.method !== 'GET') return;
   const url = new URL(request.url);
-
-  // 外部 API 不攔截，直接走網路
-  if (url.origin !== self.location.origin) {
-    return;
-  }
-
-  // GitHub Pages 網站內容：優先網路，失敗再使用快取
-  if (
-    request.mode === 'navigate' ||
-    url.pathname.endsWith('/index.html')
-  ) {
-    event.respondWith(
-      fetch(request)
-        .then(response => {
-          if (response && response.ok) {
-            const copy = response.clone();
-
-            caches.open(CACHE_NAME)
-              .then(cache => cache.put(request, copy));
-
-            return response;
-          }
-
-          return caches.match(request);
-        })
-        .catch(() => caches.match(request))
-    );
-
-    return;
-  }
-
-  // 其他同網域靜態資源：快取優先
-  event.respondWith(
-    caches.match(request)
-      .then(cachedResponse => {
-        if (cachedResponse) {
-          return cachedResponse;
+  // Do not cache API calls or requests to other origins.
+  if (url.origin !== self.location.origin) return;
+  // Always try the latest app document first, so deployments don't stay stale.
+  if (request.mode === 'navigate' || url.pathname.endsWith('/index.html') || url.pathname.endsWith('/')) {
+    event.respondWith((async () => {
+      try {
+        const response = await fetch(request, {cache: 'no-cache'});
+        if (response && response.ok) {
+          const cache = await caches.open(CACHE_NAME);
+          cache.put('./index.html', response.clone()).catch(() => {});
         }
-
-        return fetch(request)
-          .then(response => {
-            if (!response || !response.ok) {
-              return response;
-            }
-
-            const copy = response.clone();
-
-            caches.open(CACHE_NAME)
-              .then(cache => cache.put(request, copy));
-
-            return response;
-          });
-      })
-  );
+        return response;
+      } catch (error) {
+        return (await caches.match(request)) || (await caches.match('./index.html')) || Response.error();
+      }
+    })());
+    return;
+  }
+  event.respondWith((async () => {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    try {
+      const response = await fetch(request);
+      if (response && response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        cache.put(request, response.clone()).catch(() => {});
+      }
+      return response;
+    } catch (error) {
+      return Response.error();
+    }
+  })());
 });
